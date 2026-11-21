@@ -48,7 +48,8 @@ def sim_root(tmp_path_factory):
     root = tmp_path_factory.mktemp("bw")
     sim.write(root)
     env = {**os.environ, "BW_ROOT": str(root), "PYTHONPATH": str(REPO)}
-    for mod in (["src.war"], ["src.value_mix"], ["src.value_mix", "--iq"]):
+    for mod in (["src.war", "--anchor", "bref"], ["src.war", "--anchor", "fg"], ["src.value_mix"],
+                ["src.value_mix", "--anchor", "bref"], ["src.value_mix", "--iq"], ["src.compare_defense"]):
         r = subprocess.run([sys.executable, "-m", *mod], cwd=REPO, env=env, capture_output=True, text=True)
         assert r.returncode == 0, r.stderr[-3000:]
     return root
@@ -67,7 +68,7 @@ def test_linear_weights_are_sane():
 
 def test_game_war_sums_to_bref(sim_root):
     import glob
-    g = pd.concat(pd.read_csv(p) for p in glob.glob(str(sim_root / "data" / "derived" / "game_war_*.csv.gz")))
+    g = pd.concat(pd.read_csv(p) for p in glob.glob(str(sim_root / "data" / "derived" / "game_war_bref_*.csv.gz")))
     b = pd.read_csv(sim_root / "data" / "raw" / "bref_war_bat.csv.gz")
     s = g.groupby(["season", "player"])[["off", "def", "pos_adj", "rep"]].sum()
     b = b.rename(columns={"year_ID": "season", "mlb_ID": "player"}).set_index(["season", "player"])
@@ -81,14 +82,27 @@ def test_game_war_sums_to_bref(sim_root):
 
 
 def test_summary_has_every_position_and_valid_shares(sim_root):
-    s = pd.read_csv(sim_root / "reports" / "value_mix_summary.csv")
+    s = pd.read_csv(sim_root / "reports" / "value_mix_summary_fg.csv")
     assert list(s["pos"]) == ["C", "1B", "2B", "3B", "SS", "LF", "CF", "RF", "DH"]
     assert ((s["off_share"] >= 0) & (s["off_share"] <= 1)).all()
     assert s.loc[s["pos"] == "DH", "off_share"].iloc[0] == 1.0
-    assert (sim_root / "reports" / "value_mix.png").exists()
+    assert (sim_root / "reports" / "value_mix_fg.png").exists()
 
 
 def test_players_centred_within_season_position(sim_root):
-    p = pd.read_csv(sim_root / "reports" / "value_mix_players.csv")
+    p = pd.read_csv(sim_root / "reports" / "value_mix_players_fg.csv")
     m = p.groupby(["season", "pos"])[["off_c", "def_c"]].mean().abs()
     assert (m < 1e-9).all().all()
+
+
+def test_fg_game_war_sums_to_fangraphs(sim_root):
+    import glob
+    import json
+    g = pd.concat(pd.read_csv(p) for p in glob.glob(str(sim_root / "data" / "derived" / "game_war_fg_*.csv.gz")))
+    fg = pd.concat(pd.DataFrame(json.load(open(p))["data"]) for p in glob.glob(str(sim_root / "data" / "raw" / "fg_*.json")))
+    fg = fg.rename(columns={"Season": "season", "xMLBAMID": "player"}).set_index(["season", "player"])
+    s = g.groupby(["season", "player"])[["off", "def", "pos_adj", "rep", "war"]].sum().join(fg, how="inner")
+    assert len(s) > 50
+    total = s["off"] + s["def"] + s["pos_adj"] + s["rep"]
+    assert (total - s["RAR"]).abs().max() < 1e-6                   # framing ends up inside def
+    assert (s["war"] - s["WAR"]).abs().max() < 1e-6

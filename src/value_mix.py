@@ -3,7 +3,8 @@ vs defense, 2021 -> latest season pooled.
 
     python -m src.value_mix            # builds everything it needs, then the chart + tables in reports/
 
-    python -m src.value_mix --iq       # same, with our own offense + IQ defense instead of the B-Ref anchor
+    python -m src.value_mix --anchor bref   # anchor to bWAR instead (default: fWAR if saved, else bWAR)
+    python -m src.value_mix --iq       # our own offense + IQ defense, no anchor
 
 Season totals come from the game-by-game WAR tables (src.war): offense and defense anchored to Baseball-Reference.
 Qualified starters (81+ starts at one position) -> rates per 150 games -> centred on that season's position
@@ -32,11 +33,11 @@ def qualified(starts: pd.DataFrame, year: int) -> pd.DataFrame:
     return q
 
 
-def build_season(year: int, games: pd.DataFrame, source: str = "bref") -> pd.DataFrame:
+def build_season(year: int, games: pd.DataFrame, source: str = "anchor") -> pd.DataFrame:
     """Season rates for qualified starters from the game-by-game WAR table.
-    source = 'bref'  B-Ref-anchored offense / defense (season totals = Baseball-Reference)
-             'iq'    our own offense and IQ-model defense, unanchored"""
-    off_c, def_c = ("off", "def") if source == "bref" else ("off_ours", "def_iq")
+    source = 'anchor'  offense / defense anchored to fWAR or bWAR season totals
+             'iq'      our own offense and IQ-model defense, unanchored"""
+    off_c, def_c = ("off", "def") if source == "anchor" else ("off_ours", "def_iq")
     s = games.groupby("player").agg(pa=("pa", "sum"), outs=("outs", "sum"), off_runs=(off_c, "sum"),
                                     def_runs=(def_c, "sum"), war=("war", "sum"), name=("name", "first"))
     q = qualified(cached_starts(year), year).join(s, on="player")
@@ -118,12 +119,13 @@ def chart(summary: pd.DataFrame, path) -> None:
     span = f"{seasons[0]}-{seasons[-1]}" if seasons else ""
     fig.text(0.06, 0.955, f"What separates starters at each position: offense or defense? ({span})",
              fontsize=15, fontweight="bold", color=INK)
-    fig.text(0.06, 0.885, "Share of the spread in value between starters (81+ starts at the position). SD = standard "
-             "deviation in runs per 150 games.\nBlack bars: 95% interval on the split. n = player-seasons.",
+    src_lbl = summary.attrs.get("source", "")
+    fig.text(0.06, 0.885, "Share of the spread in value between starters (81+ starts at the position). "
+             f"Offense and defense: {src_lbl}.\nSD = standard deviation in runs per 150 games. "
+             "Black bars: 95% interval on the split. n = player-seasons.",
              fontsize=10, color=INK2)
     handles = [plt.Rectangle((0, 0), 1, 1, color=OFF), plt.Rectangle((0, 0), 1, 1, color=DEF)]
-    src_lbl = "B-Ref season totals" if summary.attrs.get("source", "bref") == "bref" else "IQ models"
-    ax.legend(handles, [f"Offense (batting + baserunning, {src_lbl})", f"Defense ({src_lbl}, no ABS)"],
+    ax.legend(handles, ["Offense (batting + baserunning)", "Defense (no ABS)"],
               loc="lower left", bbox_to_anchor=(0.0, 1.0), ncol=2, frameon=False, fontsize=10)
     fig.text(0.06, 0.02, "Share = each side's variance / (offense variance + defense variance). r = correlation between "
              "a starter's offense and defense. Each season is centred on its own position average before pooling.",
@@ -136,21 +138,24 @@ def chart(summary: pd.DataFrame, path) -> None:
 def main(argv: list[str] | None = None) -> None:
     import sys
     argv = sys.argv[1:] if argv is None else argv
-    source = "iq" if "--iq" in argv else "bref"
-    games = load_all()
+    from src.war import default_anchor
+    source = "iq" if "--iq" in argv else "anchor"
+    anchor = argv[argv.index("--anchor") + 1] if "--anchor" in argv else default_anchor()
+    games = load_all(anchor)
     years = sorted(games)
-    print(f"Seasons: {years}  |  defense + offense source: {'Baseball-Reference-anchored' if source == 'bref' else 'IQ models'}")
+    label = {"fg": "FanGraphs (fWAR)", "bref": "Baseball-Reference (bWAR)"}[anchor] if source == "anchor" else "IQ models"
+    print(f"Seasons: {years}  |  offense + defense: {label}")
     pool = pd.concat([build_season(y, games[y], source) for y in years], ignore_index=True)
     pool = pool[pool["off_rate"].notna() & pool["def_rate"].notna()].copy()
     grp = pool.groupby(["season", "pos"])
     pool["off_c"] = pool["off_rate"] - grp["off_rate"].transform("mean")
     pool["def_c"] = pool["def_rate"] - grp["def_rate"].transform("mean")
     REPORTS.mkdir(parents=True, exist_ok=True)
-    tag = "" if source == "bref" else "_iq"
+    tag = f"_{anchor}" if source == "anchor" else "_iq"
     pool.assign(pos_name=pool["pos"].map(POS)).to_csv(REPORTS / f"value_mix_players{tag}.csv", index=False)
     summary = summarize(pool)
     summary.attrs["seasons"] = years
-    summary.attrs["source"] = source
+    summary.attrs["source"] = label
     summary.to_csv(REPORTS / f"value_mix_summary{tag}.csv", index=False)
     chart(summary, REPORTS / f"value_mix{tag}.png")
     show = summary.copy()

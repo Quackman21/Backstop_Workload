@@ -26,16 +26,20 @@
   - **wGDP:** double plays hit into compared with the league rate, on PAs with a runner on first and fewer than 2 outs.
 - Results, not expected stats. Value means what actually happened.
 
-### Anchored to Baseball-Reference WAR (bWAR)
-Season totals of offense and defense come from **Baseball-Reference's WAR file** (`runs_above_avg_off`, and
-`runs_defense`, which is DRS-based). Our event-level data supplies only the **game-to-game shape**:
+### Anchored to FanGraphs WAR (fWAR); Baseball-Reference (bWAR) kept for comparison
+Season totals of offense and defense come from a public WAR. Our event-level data supplies only the **game-to-game shape**.
+
+- **FanGraphs (default):** offense = `Offense` (batting + baserunning). Defense = RAR − Offense − Positional − League − Replacement, which is Statcast-based fielding **plus catcher framing**. FanGraphs blocks scripts, so each season is saved from the browser as `data/raw/fg_<year>.json`; the link is in `src/fangraphs.py`.
+- **Baseball-Reference:** offense = `runs_above_avg_off`, defense = `runs_defense` (DRS-based). **B-Ref's WAR leaves out the framing part of DRS**, so its catcher defense is much narrower. That's why it's kept for comparison only.
+
+How the anchoring works:
 
 - **Game offense** = our runs that game + (B-Ref season offense − our season offense) × his share of the season's PAs.
 - **Game defense** = IQ runs that game + (B-Ref season defense − IQ season defense) × his share of the season's innings.
-- **Positional adjustment** is B-Ref's, spread by innings. **Replacement** is B-Ref's, spread by PAs.
-- **Game WAR** = (off + def + pos + rep) ÷ that season's runs per win (B-Ref's, taken from their runs_above_avg / WAA).
+- **Positional adjustment** comes from the anchor, spread by innings. **Replacement** (plus league adjustment) comes from the anchor, spread by PAs.
+- **Game WAR** = (off + def + pos + rep) ÷ that season's runs per win (the anchor's own conversion, with a small leftover spread by PA so seasons sum exactly to its WAR).
 
-Every player-season therefore adds up exactly to B-Ref's runs. Output is in `data/derived/game_war_<year>.csv.gz`, with a check in `reports/war_check.csv`. To compare, `python -m src.value_mix --iq` runs Part 1 on our own models without the anchor.
+Every player-season therefore adds up exactly to the anchor's runs and WAR. Output is in `data/derived/game_war_<anchor>_<year>.csv.gz`, with a check in `reports/war_check_<anchor>.csv`. `python -m src.compare_defense` compares IQ, B-Ref and FanGraphs defense by position: spread, agreement, and year-to-year repeatability. To compare, `python -m src.value_mix --iq` runs Part 1 on our own models without the anchor.
 
 ### Game-to-game defense shape (IQ_Savant models)
 - **C:** framing runs + blocking runs + throwing runs. **ABS challenges are left out**, because the other seasons don't have them.
@@ -61,14 +65,17 @@ For each position, over the pooled player-seasons:
 
 ### Known limits
 - Catchers in an even platoon (both under 81 starts) are left out, so the catcher group leans toward true starters.
-- Season-level size comes from B-Ref (DRS-based defense). The game-to-game shape comes from IQ models. B-Ref season defense covers all positions combined, not split by position.
+- Season-level size comes from the anchor, and the game-to-game shape comes from IQ models. Anchor season defense covers all positions combined, not split by position.
 - Observed seasons include luck as well as skill on both sides. That's right for "value produced," but it isn't a talent split.
 - Baserunning outs on plays the UBR contexts don't cover (fielder's choices, force plays) aren't credited to the runner.
 
 ### How to run (Mac, in the repo with the .venv active)
     python -m src.fetch_runners      # once: play-by-play runner moves, ~3 min per season
     python -m src.bref               # once (or to refresh): Baseball-Reference WAR file
-    python -m src.war                # game-by-game WAR for every player, + check vs bWAR
-    python -m src.value_mix          # Part 1 chart (B-Ref anchored);  --iq for our own models
+    # save data/raw/fg_<year>.json for every season from the browser (link in src/fangraphs.py)
+    python -m src.fangraphs          # check the FanGraphs files
+    python -m src.war                # game-by-game WAR (fWAR anchor; --anchor bref for bWAR)
+    python -m src.value_mix          # Part 1 chart;  --anchor bref  or  --iq  to compare
+    python -m src.compare_defense    # which defense metric repeats best, by position
 
 ## Part 2: Workload (not designed yet)

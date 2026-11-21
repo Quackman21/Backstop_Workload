@@ -175,3 +175,18 @@ def write(root, years=(2021, 2022)) -> None:
                              "runs_above_avg_def": dfn + posr, "WAA": raa / 10, "WAR": (raa + 11) / 10,
                              "WAR_off": 0, "WAR_def": 0})
     pd.DataFrame(rows).to_csv(root / "data" / "raw" / "bref_war_bat.csv.gz", index=False)
+    import json
+    for y in years:
+        fg = []
+        for r in rows:
+            if r["year_ID"] != y:
+                continue
+            framing = rng.normal(0, 6) if str(r["mlb_ID"]).endswith("02") else None
+            fld = r["runs_defense"] + rng.normal(0, 3)
+            off, posr, rep, lg = r["runs_above_avg_off"], r["runs_position"], 11.0, 0.5
+            rar = off + fld + (framing or 0) + posr + rep + lg
+            fg.append({"xMLBAMID": r["mlb_ID"], "PlayerName": r["name_common"], "Season": y, "PA": 350, "G": 84,
+                       "Batting": off, "BaseRunning": 0.0, "Offense": off, "Fielding": fld, "CFraming": framing,
+                       "Positional": posr, "wLeague": lg, "Replacement": rep, "RAR": rar, "WAR": rar / 9.5,
+                       "Defense": fld + posr, "position": "C" if framing is not None else "OF"})
+        json.dump({"data": fg}, open(root / "data" / "raw" / f"fg_{y}.json", "w"))
