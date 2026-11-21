@@ -2,6 +2,15 @@
 
 **Seasons:** 2021 to current. Catcher stances changed, so earlier seasons are left out.
 
+**Data sources:** FanGraphs (fWAR and its components) and data pulled with pybaseball (Statcast) only. IQ_Savant's models are a **reference only**. They never feed a result, and they appear only as an explicitly labeled comparison (`--iq`, `compare_defense`).
+
+## Part 1a: Run value by position, per 162 games
+`python -m src.position_value` takes the average qualified starter (81+ starts at the position) over 2021 onward, straight from FanGraphs season totals, projected to 162 games (pooled runs ÷ pooled games played × 162):
+- **Offense** = Batting + Base Running.
+- **Defense** = Fielding (Statcast-based, including catcher framing) + Positional adjustment, which is FanGraphs' "Def".
+
+Output: `reports/position_value_162.png` and `.csv`.
+
 ## Part 1: How each position gets its value
 
 **Question.** Among starters at each position, how much of the difference between a good one and a bad one comes from offense and how much from defense?

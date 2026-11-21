@@ -62,7 +62,8 @@ def load() -> pd.DataFrame:
         "player": d["xMLBAMID"].astype("int64"), "season": d["Season"].astype(int), "name": d["PlayerName"],
         "off_runs": z("Offense"), "pos_runs": z("Positional"), "rep_runs": z("Replacement") + z("wLeague"),
         "WAR": d["WAR"], "RAR": d["RAR"], "fielding": z("Fielding"), "framing": z("CFraming"),
-        "fg_position": d.get("position")})
+        "batting": z("Batting"), "baserunning": z("BaseRunning"), "league": z("wLeague"),
+        "replacement": z("Replacement"), "G": d["G"], "PA": d["PA"], "fg_position": d.get("position")})
     out["def_runs"] = d["RAR"] - out["off_runs"] - out["pos_runs"] - out["rep_runs"]
     return out.reset_index(drop=True)
 

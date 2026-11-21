@@ -106,3 +106,13 @@ def test_fg_game_war_sums_to_fangraphs(sim_root):
     total = s["off"] + s["def"] + s["pos_adj"] + s["rep"]
     assert (total - s["RAR"]).abs().max() < 1e-6                   # framing ends up inside def
     assert (s["war"] - s["WAR"]).abs().max() < 1e-6
+
+
+def test_position_value_runs(sim_root):
+    env = {**os.environ, "BW_ROOT": str(sim_root), "PYTHONPATH": str(REPO)}
+    r = subprocess.run([sys.executable, "-m", "src.position_value"], cwd=REPO, env=env, capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr[-3000:]
+    t = pd.read_csv(sim_root / "reports" / "position_value_162.csv")
+    assert list(t["pos"]) == ["C", "1B", "2B", "3B", "SS", "LF", "CF", "RF", "DH"]
+    assert ((t["offense"] + t["defense"] - t["total"]).abs() < 1e-9).all()
+    assert ((t["fielding"] + t["positional"] - t["defense"]).abs() < 1e-9).all()
