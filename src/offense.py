@@ -1,13 +1,14 @@
-"""Offensive value per player-season, in runs above average: batting + baserunning.
+"""Offensive value in runs above average -- batting + baserunning -- kept EVENT BY EVENT so it can be summed per game
+or per season.
 
-Batting       sum over his wOBA PAs of (linear weight of the result - league average per PA), park-adjusted PA by
-              PA: - (park factor of that game's park - 1) x league runs per PA.   (= park-adjusted wRAA)
-Baserunning   wSB   steals / caught stealing (pickoff-caught-stealing counts as CS), valued from RE24, minus the
-                    league's steal runs per time on first (1B + BB + HBP).
-              UBR   extra bases on singles, doubles and outs in play: for every runner on base, the run value of
-                    where he ended up minus the league-average result for the same play type, base, outs and
-                    field (LF / CF / RF / infield).
-              wGDP  double plays hit into vs the league rate, on PAs with a runner on 1st and < 2 outs.
+Batting       each wOBA PA: linear weight of the result - league average per PA, park-adjusted in that game's park
+              (- (park factor - 1) x league runs per PA).                              (= park-adjusted wRAA)
+Baserunning   wSB   each steal / caught stealing (pickoff-caught-stealing counts as CS) valued from RE24; each time
+                    he reaches first (1B / BB / HBP) is charged the league's steal runs per time on first.
+              UBR   each runner on a single, double or out in play: run value of where he ended up - the league-average
+                    result for the same play type, base, outs and field (LF / CF / RF / infield).
+              wGDP  each PA with a runner on 1st and < 2 outs: (DP or not - league DP rate) x the extra runs a DP costs.
+Every function returns rows of (player, game_pk, <component>) runs.
 """
 from __future__ import annotations
 
@@ -22,6 +23,7 @@ SB_TYPES = {"stolen_base_2b": "sb", "stolen_base_3b": "sb", "stolen_base_home": 
             "caught_stealing_2b": "cs", "caught_stealing_3b": "cs", "caught_stealing_home": "cs",
             "pickoff_caught_stealing_2b": "cs", "pickoff_caught_stealing_3b": "cs",
             "pickoff_caught_stealing_home": "cs"}
+COMPONENTS = ["bat", "wsb", "ubr", "wgdp"]
 
 
 # ---------------------------------------------------------------- batting
@@ -29,18 +31,15 @@ def batting(pa: pd.DataFrame, lw: dict, pf: dict) -> pd.DataFrame:
     cls = lw_class(pa)
     w = pa[cls.notna()].copy()
     w["lw"] = cls[cls.notna()].map(lw).astype(float)
-    lg = w["lw"].mean()
     tot_runs = pa.groupby(["game_pk", "batting_team"])["score_post"].max().sum()
     runs_per_pa = tot_runs / len(w)
-    w["park"] = -(w["home_team"].map(pf).fillna(1.0) - 1.0) * runs_per_pa
-    w["bat"] = w["lw"] - lg + w["park"]
-    out = w.groupby("batter").agg(pa=("bat", "size"), bat_runs=("bat", "sum"), park_runs=("park", "sum"))
-    out.index.name = "player"
-    return out
+    park = -(w["home_team"].map(pf).fillna(1.0) - 1.0) * runs_per_pa
+    return pd.DataFrame({"player": w["batter"], "game_pk": w["game_pk"], "bat": w["lw"] - w["lw"].mean() + park,
+                         "pa": 1})
 
 
 # ---------------------------------------------------------------- baserunning: steals
-def _runner_rows(year: int) -> pd.DataFrame:
+def runner_rows(year: int) -> pd.DataFrame:
     p = RAW / f"runners_{year}.csv.gz"
     if not p.exists():
         raise FileNotFoundError(f"{p} missing -- run  python -m src.fetch_runners --season {year}")
@@ -54,7 +53,6 @@ def steals(pa: pd.DataFrame, runners: pd.DataFrame, re: dict) -> pd.DataFrame:
     ev = runners[runners["event_type"].isin(SB_TYPES)].copy()
     ev["kind"] = ev["event_type"].map(SB_TYPES)
     ev = ev.drop_duplicates(["game_pk", "at_bat_number", "play_index", "runner"])
-    # value each kind from RE24, using the state at the start of the PA it happened in (single-runner moves only)
     st = pa.set_index(["game_pk", "at_bat_number"])[["b0", "o0"]]
     ev = ev.join(st, on=["game_pk", "at_bat_number"])
     bit = ev["start"].map(BASE_BIT)
@@ -68,14 +66,12 @@ def steals(pa: pd.DataFrame, runners: pd.DataFrame, re: dict) -> pd.DataFrame:
     runs = ((v["kind"] == "sb") & (v["end"] == "score")).astype(float)
     v["rv"] = runs + re_of(re, after_b, after_o) - re_of(re, b, v["o0"])
     value = v.groupby("kind")["rv"].mean().to_dict()
-    ev["rv"] = ev["kind"].map(value)
-    sb_runs = ev.groupby("runner")["rv"].sum()
-    # opportunities: times on first via 1B / BB / HBP
-    on1 = pa[pa["events"].isin(["single", "walk", "hit_by_pitch"])].groupby("batter").size()
-    lg_rate = ev["rv"].sum() / on1.sum()
-    players = sb_runs.index.union(on1.index)
-    w = sb_runs.reindex(players, fill_value=0) - lg_rate * on1.reindex(players, fill_value=0)
-    return pd.DataFrame({"wsb": w, "sb_value": value.get("sb", np.nan), "cs_value": value.get("cs", np.nan)})
+    ev["wsb"] = ev["kind"].map(value)
+    on1 = pa[pa["events"].isin(["single", "walk", "hit_by_pitch"])]
+    lg_rate = ev["wsb"].sum() / max(len(on1), 1)
+    credit = ev[["runner", "game_pk", "wsb"]].rename(columns={"runner": "player"})
+    charge = pd.DataFrame({"player": on1["batter"], "game_pk": on1["game_pk"], "wsb": -lg_rate})
+    return pd.concat([credit, charge], ignore_index=True)
 
 
 # ---------------------------------------------------------------- baserunning: extra bases (UBR)
@@ -96,70 +92,73 @@ def _field(hl: pd.Series) -> pd.Series:
                      index=hl.index)
 
 
-def ubr(pa: pd.DataFrame, runners: pd.DataFrame, re: dict) -> pd.Series:
+def ubr(pa: pd.DataFrame, runners: pd.DataFrame, re: dict) -> pd.DataFrame:
     p = pa.assign(group=_bip_group(pa), field=_field(pa["hit_location"]))
     p = p[p["group"].notna() & (p["bases"] > 0)]
     mv = runners[(runners["play_index"] == runners["bip_index"]) & runners["start"].isin(BASE_BIT)]
-    # one row per runner per PA: first start base, last end, out if any movement says out
     agg = mv.groupby(["game_pk", "at_bat_number", "runner"], sort=False).agg(
         start=("start", "first"), end=("end", "last"), is_out=("is_out", "max")).reset_index()
-    agg["result"] = np.where(agg["is_out"], "out", agg["end"].fillna("out"))
-    d = agg.merge(p[["game_pk", "at_bat_number", "group", "field", "outs", "batting_team"]],
-                  on=["game_pk", "at_bat_number"])
+    agg["result"] = np.where(agg["is_out"].astype(bool), "out", agg["end"].fillna("out"))
+    d = agg.merge(p[["game_pk", "at_bat_number", "group", "field", "outs"]], on=["game_pk", "at_bat_number"])
     if d.empty:
-        return pd.Series(dtype=float)
+        return pd.DataFrame(columns=["player", "game_pk", "ubr"])
     batter_bit = d["group"].map({"single": 1, "double": 2}).fillna(0).astype(int)
     batter_out = d["group"].isin(["air_out", "ground_out"]).astype(int)
     results = ["1B", "2B", "3B", "score", "out"]
 
     def value(res: str) -> np.ndarray:
-        rbit = BASE_BIT.get(res, 0)
         outs = d["outs"].to_numpy() + batter_out.to_numpy() + (1 if res == "out" else 0)
-        bases = batter_bit.to_numpy() | rbit
+        bases = batter_bit.to_numpy() | BASE_BIT.get(res, 0)
         return (1.0 if res == "score" else 0.0) + re_of(re, bases, outs)
 
     vals = {r: value(r) for r in results}
     d["v_actual"] = np.select([d["result"] == r for r in results], [vals[r] for r in results], np.nan)
-    # league-average result for the same play type / start base / outs / field (backs off to no field if thin)
-    keys_full, keys_thin = ["group", "start", "outs", "field"], ["group", "start", "outs"]
-    for keys, tag in ((keys_full, "f"), (keys_thin, "t")):
+    for keys, tag in ((["group", "start", "outs", "field"], "f"), (["group", "start", "outs"], "t")):
         freq = pd.crosstab([d[k] for k in keys], d["result"], normalize="index")
-        n = d.groupby(keys).size().rename(f"n_{tag}")
         for r in results:
             col = freq[r] if r in freq else pd.Series(0.0, index=freq.index)
             d = d.join(col.rename(f"p_{tag}_{r}"), on=keys)
-        d = d.join(n, on=keys)
+        d = d.join(d.groupby(keys).size().rename(f"n_{tag}"), on=keys)
     use_full = d["n_f"] >= 20
     exp = np.zeros(len(d))
     for r in results:
-        p_r = np.where(use_full, d[f"p_f_{r}"], d[f"p_t_{r}"])
-        exp += np.nan_to_num(p_r) * vals[r]
-    d["ubr"] = d["v_actual"] - exp
-    return d.groupby("runner")["ubr"].sum()
+        exp += np.nan_to_num(np.where(use_full, d[f"p_f_{r}"], d[f"p_t_{r}"])) * vals[r]
+    return pd.DataFrame({"player": d["runner"], "game_pk": d["game_pk"], "ubr": d["v_actual"] - exp})
 
 
 # ---------------------------------------------------------------- baserunning: double plays
-def gdp(pa: pd.DataFrame, re: dict) -> pd.Series:
+def gdp(pa: pd.DataFrame, re: dict) -> pd.DataFrame:
     opp = pa[(pa["woba_denom"].fillna(0) > 0) & ((pa["bases"].fillna(0).astype(int) & 1) > 0) & (pa["outs"] < 2)]
     is_gdp = opp["events"].astype(str).eq("grounded_into_double_play")
     rv = play_value(opp, re)
     other_out = lw_class(opp).eq("out") & ~is_gdp
-    cost = rv[is_gdp].mean() - rv[other_out].mean()           # extra runs lost by a DP instead of an ordinary out
-    lg = is_gdp.mean()
-    by = opp.assign(g=is_gdp).groupby("batter")["g"].agg(["sum", "size"])
-    return (by["sum"] - lg * by["size"]) * cost
+    cost = rv[is_gdp].mean() - rv[other_out].mean()
+    return pd.DataFrame({"player": opp["batter"], "game_pk": opp["game_pk"],
+                         "wgdp": (is_gdp.astype(float) - is_gdp.mean()) * cost})
 
 
 # ---------------------------------------------------------------- all together
+def offense_events(year: int, pa: pd.DataFrame, re: dict, lw: dict, pf: dict) -> pd.DataFrame:
+    runners = runner_rows(year)
+    parts = [batting(pa, lw, pf), steals(pa, runners, re), ubr(pa, runners, re), gdp(pa, re)]
+    ev = pd.concat(parts, ignore_index=True)
+    for c in COMPONENTS + ["pa"]:
+        ev[c] = pd.to_numeric(ev[c], errors="coerce").fillna(0.0) if c in ev else 0.0
+    ev = ev[ev["player"].notna()]
+    ev["player"] = ev["player"].astype("int64")
+    ev["game_pk"] = ev["game_pk"].astype("int64")
+    return ev
+
+
+def by_game(ev: pd.DataFrame) -> pd.DataFrame:
+    g = ev.groupby(["player", "game_pk"])[COMPONENTS + ["pa"]].sum()
+    g["bsr"] = g["wsb"] + g["ubr"] + g["wgdp"]
+    g["off_runs"] = g["bat"] + g["bsr"]
+    return g.reset_index()
+
+
 def season_offense(year: int, pa: pd.DataFrame, re: dict, lw: dict, pf: dict) -> pd.DataFrame:
-    runners = _runner_rows(year)
-    bat = batting(pa, lw, pf)
-    sb = steals(pa, runners, re)["wsb"]
-    ub = ubr(pa, runners, re)
-    gd = gdp(pa, re)
-    out = bat.join(sb.rename("wsb"), how="left").join(ub.rename("ubr"), how="left").join(gd.rename("wgdp"), how="left")
-    out[["wsb", "ubr", "wgdp"]] = out[["wsb", "ubr", "wgdp"]].fillna(0.0)
-    out["bsr"] = out["wsb"] + out["ubr"] + out["wgdp"]
-    out["off_runs"] = out["bat_runs"] + out["bsr"]
-    out.insert(0, "season", year)
-    return out.reset_index()
+    g = by_game(offense_events(year, pa, re, lw, pf))
+    s = g.groupby("player")[COMPONENTS + ["pa", "bsr", "off_runs"]].sum().rename(columns={"bat": "bat_runs"})
+    s.insert(0, "season", year)
+    return s.reset_index()

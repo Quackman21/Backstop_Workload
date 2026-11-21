@@ -45,7 +45,7 @@ def plate_appearances(df: pd.DataFrame) -> pd.DataFrame:
     g = df.groupby(["game_pk", "at_bat_number"], sort=False)
     first, last = g.head(1).set_index(["game_pk", "at_bat_number"]), g.tail(1).set_index(["game_pk", "at_bat_number"])
     pa = pd.DataFrame({
-        "inning": last["inning"], "inning_topbot": last["inning_topbot"],
+        "game_date": last["game_date"], "inning": last["inning"], "inning_topbot": last["inning_topbot"],
         "batter": last["batter"], "pitcher": last["pitcher"], "events": last["events"],
         "bb_type": last["bb_type"], "hit_location": last["hit_location"], "woba_denom": last["woba_denom"],
         "home_team": last["home_team"], "away_team": last["away_team"],
@@ -66,10 +66,10 @@ def plate_appearances(df: pd.DataFrame) -> pd.DataFrame:
 
 def prepare(season: int, force: bool = False) -> None:
     """Read the big pitch file ONCE per season and save the two small tables everything else uses:
-    plate appearances (data/derived/pa_<year>) and starts by position (data/derived/starts_<year>)."""
+    plate appearances (data/derived/pa2_<year>) and starts by position (data/derived/starts_<year>)."""
     from src.starts import starts
     DERIVED.mkdir(parents=True, exist_ok=True)
-    pa_p, st_p = DERIVED / f"pa_{season}.csv.gz", DERIVED / f"starts_{season}.csv.gz"
+    pa_p, st_p = DERIVED / f"pa2_{season}.csv.gz", DERIVED / f"starts_{season}.csv.gz"
     if pa_p.exists() and st_p.exists() and not force:
         return
     print(f"[{season}] reading Statcast pitches...", flush=True)
@@ -80,7 +80,7 @@ def prepare(season: int, force: bool = False) -> None:
 
 def cached_pa(season: int) -> pd.DataFrame:
     prepare(season)
-    return pd.read_csv(DERIVED / f"pa_{season}.csv.gz", low_memory=False)
+    return pd.read_csv(DERIVED / f"pa2_{season}.csv.gz", low_memory=False)
 
 
 def cached_starts(season: int) -> pd.DataFrame:

@@ -48,14 +48,36 @@ def sim_root(tmp_path_factory):
     root = tmp_path_factory.mktemp("bw")
     sim.write(root)
     env = {**os.environ, "BW_ROOT": str(root), "PYTHONPATH": str(REPO)}
-    r = subprocess.run([sys.executable, "-m", "src.value_mix"], cwd=REPO, env=env, capture_output=True, text=True)
-    assert r.returncode == 0, r.stderr[-3000:]
+    for mod in (["src.war"], ["src.value_mix"], ["src.value_mix", "--iq"]):
+        r = subprocess.run([sys.executable, "-m", *mod], cwd=REPO, env=env, capture_output=True, text=True)
+        assert r.returncode == 0, r.stderr[-3000:]
     return root
 
 
-def test_linear_weights_are_sane(sim_root):
-    lw = pd.read_csv(sim_root / "reports" / "linear_weights.csv").iloc[0]
+def test_linear_weights_are_sane():
+    from tests import sim
+    from src.statcast import plate_appearances
+    from src.run_values import linear_weights, re24
+    sc, *_ = sim.season(2021)
+    sc = sc.sort_values(["game_pk", "at_bat_number", "pitch_number"]).reset_index(drop=True)
+    pa = plate_appearances(sc)
+    lw = linear_weights(pa, re24(pa))
     assert lw["out"] < 0 < lw["walk"] < lw["single"] < lw["double"] < lw["home_run"]
+
+
+def test_game_war_sums_to_bref(sim_root):
+    import glob
+    g = pd.concat(pd.read_csv(p) for p in glob.glob(str(sim_root / "data" / "derived" / "game_war_*.csv.gz")))
+    b = pd.read_csv(sim_root / "data" / "raw" / "bref_war_bat.csv.gz")
+    s = g.groupby(["season", "player"])[["off", "def", "pos_adj", "rep"]].sum()
+    b = b.rename(columns={"year_ID": "season", "mlb_ID": "player"}).set_index(["season", "player"])
+    j = s.join(b, how="inner")
+    assert len(j) > 50
+    assert (j["off"] - j["runs_above_avg_off"]).abs().max() < 1e-6
+    assert (j["def"] - j["runs_defense"]).abs().max() < 1e-6
+    assert (j["rep"] - j["runs_replacement"]).abs().max() < 1e-6
+    w = g.groupby(["season", "player"])["war"].sum()
+    assert (w.reindex(j.index) - j["WAR"]).abs().max() < 1e-6     # sim WAR uses 10 runs per win exactly
 
 
 def test_summary_has_every_position_and_valid_shares(sim_root):

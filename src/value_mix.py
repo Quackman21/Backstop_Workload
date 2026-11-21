@@ -3,9 +3,11 @@ vs defense, 2021 -> latest season pooled.
 
     python -m src.value_mix            # builds everything it needs, then the chart + tables in reports/
 
-Steps per season: Statcast -> PAs + starts -> RE24 / linear weights -> offense runs (batting + baserunning) ->
-defense runs (IQ models) -> qualified starters (81+ starts at one position) -> rates per 150 games ->
-centred on that season's position average. Then pooled, per position:
+    python -m src.value_mix --iq       # same, with our own offense + IQ defense instead of the B-Ref anchor
+
+Season totals come from the game-by-game WAR tables (src.war): offense and defense anchored to Baseball-Reference.
+Qualified starters (81+ starts at one position) -> rates per 150 games -> centred on that season's position
+average. Then pooled, per position:
   SD offense, SD defense, their correlation, and offense share = var_off / (var_off + var_def). The overlap
   (covariance) is reported as a correlation beside it rather than folded in -- splitting it evenly can push a
   share past 100% when offense and defense pull in opposite directions.
@@ -18,10 +20,8 @@ import pandas as pd
 
 from src import config
 from src.config import BOOTSTRAP, DERIVED, MIN_STARTS, POS, REPORTS, SCALE_GAMES, SEED
-from src.defense import season_defense
-from src.offense import season_offense
-from src.run_values import game_runs, linear_weights, park_factors, re24
 from src.statcast import cached_pa, cached_starts
+from src.war import load_all
 
 
 def qualified(starts: pd.DataFrame, year: int) -> pd.DataFrame:
@@ -32,20 +32,20 @@ def qualified(starts: pd.DataFrame, year: int) -> pd.DataFrame:
     return q
 
 
-def build_season(year: int, pf: dict) -> tuple[pd.DataFrame, dict]:
+def build_season(year: int, games: pd.DataFrame, source: str = "bref") -> pd.DataFrame:
+    """Season rates for qualified starters from the game-by-game WAR table.
+    source = 'bref'  B-Ref-anchored offense / defense (season totals = Baseball-Reference)
+             'iq'    our own offense and IQ-model defense, unanchored"""
+    off_c, def_c = ("off", "def") if source == "bref" else ("off_ours", "def_iq")
+    s = games.groupby("player").agg(pa=("pa", "sum"), outs=("outs", "sum"), off_runs=(off_c, "sum"),
+                                    def_runs=(def_c, "sum"), war=("war", "sum"), name=("name", "first"))
+    q = qualified(cached_starts(year), year).join(s, on="player")
     pa = cached_pa(year)
-    re = re24(pa)
-    lw = linear_weights(pa, re)
-    off = season_offense(year, pa, re, lw, pf)
-    dfn = season_defense(year)
-    q = qualified(cached_starts(year), year)
     pa_per_game = len(pa[pa["woba_denom"].fillna(0) > 0]) / (pa["game_pk"].nunique() * 2 * 9)
-    d = q.merge(off.drop(columns="season"), on="player", how="left")
-    d = d.merge(dfn.drop(columns="season"), on=["player", "pos"], how="left")
-    d["off_rate"] = d["off_runs"] / d["pa"] * pa_per_game * SCALE_GAMES
-    d["def_rate"] = np.where(d["pos"] == 10, 0.0, d["def_runs"] / d["inn"] * 9 * SCALE_GAMES)
-    d["pa_per_game"] = pa_per_game
-    return d, {"season": year, **{k: round(v, 4) for k, v in lw.items()}, "pa_per_game": round(pa_per_game, 3)}
+    q["off_rate"] = q["off_runs"] / q["pa"] * pa_per_game * SCALE_GAMES
+    q["def_rate"] = np.where(q["pos"] == 10, 0.0, q["def_runs"] / (q["outs"] / 3) * 9 * SCALE_GAMES)
+    q["pa_per_game"] = pa_per_game
+    return q
 
 
 def split(d: pd.DataFrame) -> dict:
@@ -122,7 +122,8 @@ def chart(summary: pd.DataFrame, path) -> None:
              "deviation in runs per 150 games.\nBlack bars: 95% interval on the split. n = player-seasons.",
              fontsize=10, color=INK2)
     handles = [plt.Rectangle((0, 0), 1, 1, color=OFF), plt.Rectangle((0, 0), 1, 1, color=DEF)]
-    ax.legend(handles, ["Offense (batting + baserunning)", "Defense (IQ fielding / catching, no ABS)"],
+    src_lbl = "B-Ref season totals" if summary.attrs.get("source", "bref") == "bref" else "IQ models"
+    ax.legend(handles, [f"Offense (batting + baserunning, {src_lbl})", f"Defense ({src_lbl}, no ABS)"],
               loc="lower left", bbox_to_anchor=(0.0, 1.0), ncol=2, frameon=False, fontsize=10)
     fig.text(0.06, 0.02, "Share = each side's variance / (offense variance + defense variance). r = correlation between "
              "a starter's offense and defense. Each season is centred on its own position average before pooling.",
@@ -132,33 +133,26 @@ def chart(summary: pd.DataFrame, path) -> None:
     plt.close(fig)
 
 
-def main() -> None:
-    years = config.seasons()
-    if not years:
-        raise SystemExit("No Statcast seasons found in data/raw -- is the data/raw link to IQ_Savant there?")
-    print(f"Seasons: {years}")
-    pas = {y: cached_pa(y) for y in years}
-    pf = park_factors(pd.concat([game_runs(p) for p in pas.values()]))
-    seasons, lws = [], []
-    for y in years:
-        print(f"[{y}] offense + defense...", flush=True)
-        d, lw = build_season(y, pf)
-        seasons.append(d)
-        lws.append(lw)
-    pool = pd.concat(seasons, ignore_index=True)
+def main(argv: list[str] | None = None) -> None:
+    import sys
+    argv = sys.argv[1:] if argv is None else argv
+    source = "iq" if "--iq" in argv else "bref"
+    games = load_all()
+    years = sorted(games)
+    print(f"Seasons: {years}  |  defense + offense source: {'Baseball-Reference-anchored' if source == 'bref' else 'IQ models'}")
+    pool = pd.concat([build_season(y, games[y], source) for y in years], ignore_index=True)
     pool = pool[pool["off_rate"].notna() & pool["def_rate"].notna()].copy()
     grp = pool.groupby(["season", "pos"])
     pool["off_c"] = pool["off_rate"] - grp["off_rate"].transform("mean")
     pool["def_c"] = pool["def_rate"] - grp["def_rate"].transform("mean")
-    DERIVED.mkdir(parents=True, exist_ok=True)
     REPORTS.mkdir(parents=True, exist_ok=True)
-    pool.assign(pos_name=pool["pos"].map(POS)).to_csv(REPORTS / "value_mix_players.csv", index=False)
+    tag = "" if source == "bref" else "_iq"
+    pool.assign(pos_name=pool["pos"].map(POS)).to_csv(REPORTS / f"value_mix_players{tag}.csv", index=False)
     summary = summarize(pool)
     summary.attrs["seasons"] = years
-    summary.to_csv(REPORTS / "value_mix_summary.csv", index=False)
-    pd.Series(pf).sort_values().rename("park_factor").to_csv(REPORTS / "park_factors.csv")
-    pd.DataFrame(lws).to_csv(REPORTS / "linear_weights.csv", index=False)
-    chart(summary, REPORTS / "value_mix.png")
+    summary.attrs["source"] = source
+    summary.to_csv(REPORTS / f"value_mix_summary{tag}.csv", index=False)
+    chart(summary, REPORTS / f"value_mix{tag}.png")
     show = summary.copy()
     for c in ["off_share", "def_share", "off_share_lo", "off_share_hi"]:
         show[c] = (show[c] * 100).round(0)
@@ -166,7 +160,7 @@ def main() -> None:
         show[c] = show[c].round(2)
     print(show[["pos", "player_seasons", "players", "sd_off", "sd_def", "corr", "off_share", "off_share_lo",
                 "off_share_hi"]].to_string(index=False))
-    print(f"\nSaved reports/value_mix.png, value_mix_summary.csv, value_mix_players.csv, park_factors.csv, linear_weights.csv")
+    print(f"\nSaved reports/value_mix{tag}.png, value_mix_summary{tag}.csv, value_mix_players{tag}.csv")
 
 
 if __name__ == "__main__":

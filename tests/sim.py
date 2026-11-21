@@ -158,3 +158,20 @@ def write(root, years=(2021, 2022)) -> None:
         ru.to_csv(root / "data" / "raw" / f"runners_{y}.csv.gz", index=False)
         fl.to_csv(root / "data" / "league" / f"fielding_{y}.csv.gz", index=False)
         ca.to_csv(root / "data" / "league" / f"catching_{y}.csv.gz", index=False)
+    # a fake Baseball-Reference WAR file for every rostered hitter
+    rng = np.random.default_rng(7)
+    rows = []
+    for y in years:
+        for t in range(len(TEAMS)):
+            r = roster(t)
+            for pos, pid in list(r["fielders"].items()) + [(10, r["dh"])]:
+                off, dfn = rng.normal(0, 15), (rng.normal(0, 8) if pos != 10 else 0.0)
+                posr = {2: 9, 3: -9, 4: 2, 5: 2, 6: 6, 7: -5, 8: 2, 9: -5, 10: -12}[pos]
+                raa = off + dfn + posr
+                rows.append({"mlb_ID": pid, "name_common": f"P{pid}", "year_ID": y, "stint_ID": 1, "team_ID": TEAMS[t],
+                             "pitcher": "N", "G": 84, "PA": 350, "Inn": 700, "runs_bat": off, "runs_br": 0, "runs_dp": 0,
+                             "runs_field": dfn, "runs_catcher": 0, "runs_defense": dfn, "runs_position": posr,
+                             "runs_replacement": 11, "runs_above_avg": raa, "runs_above_avg_off": off,
+                             "runs_above_avg_def": dfn + posr, "WAA": raa / 10, "WAR": (raa + 11) / 10,
+                             "WAR_off": 0, "WAR_def": 0})
+    pd.DataFrame(rows).to_csv(root / "data" / "raw" / "bref_war_bat.csv.gz", index=False)

@@ -26,7 +26,18 @@
   - **wGDP:** double plays hit into compared with the league rate, on PAs with a runner on first and fewer than 2 outs.
 - Results, not expected stats. Value means what actually happened.
 
-### Defense (runs above average at the position, IQ_Savant models)
+### Anchored to Baseball-Reference WAR (bWAR)
+Season totals of offense and defense come from **Baseball-Reference's WAR file** (`runs_above_avg_off`, and
+`runs_defense`, which is DRS-based). Our event-level data supplies only the **game-to-game shape**:
+
+- **Game offense** = our runs that game + (B-Ref season offense − our season offense) × his share of the season's PAs.
+- **Game defense** = IQ runs that game + (B-Ref season defense − IQ season defense) × his share of the season's innings.
+- **Positional adjustment** is B-Ref's, spread by innings. **Replacement** is B-Ref's, spread by PAs.
+- **Game WAR** = (off + def + pos + rep) ÷ that season's runs per win (B-Ref's, taken from their runs_above_avg / WAA).
+
+Every player-season therefore adds up exactly to B-Ref's runs. Output is in `data/derived/game_war_<year>.csv.gz`, with a check in `reports/war_check.csv`. To compare, `python -m src.value_mix --iq` runs Part 1 on our own models without the anchor.
+
+### Game-to-game defense shape (IQ_Savant models)
 - **C:** framing runs + blocking runs + throwing runs. **ABS challenges are left out**, because the other seasons don't have them.
 - **1B / 2B / 3B / SS:** fielding runs + double-play runs.
 - **LF / CF / RF:** range runs + arm runs.
@@ -50,12 +61,14 @@ For each position, over the pooled player-seasons:
 
 ### Known limits
 - Catchers in an even platoon (both under 81 starts) are left out, so the catcher group leans toward true starters.
-- Defense comes from IQ models. Savant and FanGraphs are for checking only.
+- Season-level size comes from B-Ref (DRS-based defense). The game-to-game shape comes from IQ models. B-Ref season defense covers all positions combined, not split by position.
 - Observed seasons include luck as well as skill on both sides. That's right for "value produced," but it isn't a talent split.
 - Baserunning outs on plays the UBR contexts don't cover (fielder's choices, force plays) aren't credited to the runner.
 
 ### How to run (Mac, in the repo with the .venv active)
-    python -m src.fetch_runners      # once: play-by-play runner moves, ~10-20 min per season
-    python -m src.value_mix          # everything else, then the chart
+    python -m src.fetch_runners      # once: play-by-play runner moves, ~3 min per season
+    python -m src.bref               # once (or to refresh): Baseball-Reference WAR file
+    python -m src.war                # game-by-game WAR for every player, + check vs bWAR
+    python -m src.value_mix          # Part 1 chart (B-Ref anchored);  --iq for our own models
 
 ## Part 2: Workload (not designed yet)
