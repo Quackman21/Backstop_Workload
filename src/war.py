@@ -9,7 +9,8 @@ For each player-game:
         + (B-Ref season defense - our season defense) x his share of the season's defensive innings
   pos   B-Ref season positional adjustment x share of innings in the field (share of games for DH-only players)
   rep   B-Ref season replacement runs x share of PAs
-  WAR = (off + def + pos + rep) / that season's runs per win (B-Ref's).
+  WAR = (off + def + pos + rep) / that season's runs per win (B-Ref's), plus a small conversion term spread by PA so
+  the season sums exactly to bWAR (B-Ref converts runs to wins with each player's own run environment).
 So every player-season sums EXACTLY to B-Ref's runs, while the ups and downs from game to game come from our
 event-level data. Players B-Ref doesn't have (very rare) keep our numbers and are flagged bref_match = False.
 """
@@ -70,11 +71,16 @@ def build_season(year: int, pf: dict, b: pd.DataFrame, rpw: dict) -> pd.DataFram
     g["runs_per_win"] = r
     g["war_off"], g["war_def"] = g["off"] / r, g["def"] / r
     g["war_pos"], g["war_rep"] = g["pos_adj"] / r, g["rep"] / r
-    g["war"] = g["war_off"] + g["war_def"] + g["war_pos"] + g["war_rep"]
+    g["war_linear"] = g["war_off"] + g["war_def"] + g["war_pos"] + g["war_rep"]
+    # B-Ref turns runs into wins with each player's own run environment, so its WAR differs a little from
+    # runs / league runs-per-win. Spread that leftover by PA share so every season sums EXACTLY to bWAR.
+    left = g["player"].map(bs["WAR"]) - g.groupby("player")["war_linear"].transform("sum") if "WAR" in bs else 0.0
+    g["war_conv"] = np.where(m, pd.Series(left, index=g.index).fillna(0.0) * np.where(g["pa_season"] > 0, pa_sh, game_sh), 0.0)
+    g["war"] = g["war_linear"] + g["war_conv"]
     g.insert(0, "season", year)
     keep = ["season", "game_date", "game_pk", "player", "bref_name", "pos", "pa", "outs",
             "bat", "wsb", "ubr", "wgdp", "off_ours", "def_iq", "off", "def", "pos_adj", "rep",
-            "war_off", "war_def", "war_pos", "war_rep", "war", "runs_per_win", "bref_match", "bref_WAR"]
+            "war_off", "war_def", "war_pos", "war_rep", "war_conv", "war_linear", "war", "runs_per_win", "bref_match", "bref_WAR"]
     return g[keep].rename(columns={"bref_name": "name"})
 
 
@@ -105,11 +111,12 @@ def load_all(force: bool = False) -> dict[int, pd.DataFrame]:
 def check(games: dict[int, pd.DataFrame]) -> pd.DataFrame:
     rows = []
     for y, g in games.items():
-        s = g.groupby("player").agg(war=("war", "sum"), bref=("bref_WAR", "first"), pa=("pa", "sum"),
+        s = g.groupby("player").agg(war=("war_linear", "sum"), bref=("bref_WAR", "first"), pa=("pa", "sum"),
                                     match=("bref_match", "first"))
         s = s[s["match"] & (s["pa"] >= 100)]
-        rows.append({"season": y, "players_100pa": len(s), "corr_with_bWAR": s["war"].corr(s["bref"]),
-                     "mean_abs_diff_WAR": (s["war"] - s["bref"]).abs().mean(),
+        rows.append({"season": y, "players_100pa": len(s), "corr_runs_based_vs_bWAR": s["war"].corr(s["bref"]),
+                     "mean_abs_diff_before_conv": (s["war"] - s["bref"]).abs().mean(),
+                     "max_abs_diff_after_conv": (g.groupby("player")["war"].sum().reindex(s.index) - s["bref"]).abs().max(),
                      "unmatched_player_games": int((~g["bref_match"]).sum())})
     return pd.DataFrame(rows)
 
