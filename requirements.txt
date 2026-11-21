@@ -1,0 +1,9 @@
+pybaseball
+requests
+numpy
+pandas
+joblib
+scikit-learn==1.7.2
+matplotlib
+jupyter
+pytest
