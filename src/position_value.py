@@ -1,7 +1,8 @@
 """Run value by position: the average QUALIFIED starter, projected to 162 games, split into offense and defense.
 FanGraphs only (via the browser-saved fg_<year>.json files) -- no IQ models.
 
-    python -m src.position_value
+    python -m src.position_value             # builds the chart and opens it (Mac)
+    python -m src.position_value --no-open   # build only
 
 Qualified   81+ starts at one position in the season (starts from Statcast, pulled with pybaseball);
             players qualifying nowhere are left out.
@@ -106,7 +107,17 @@ def chart(t: pd.DataFrame, path) -> None:
     plt.close(fig)
 
 
-def main() -> None:
+def show_file(path) -> None:
+    """Open the chart in the Mac's default viewer (Preview)."""
+    import subprocess
+    import sys
+    if sys.platform == "darwin":
+        subprocess.run(["open", str(path)], check=False)
+
+
+def main(argv: list[str] | None = None) -> None:
+    import sys
+    argv = sys.argv[1:] if argv is None else argv
     REPORTS.mkdir(parents=True, exist_ok=True)
     t, p = table()
     t.to_csv(REPORTS / "position_value_162.csv", index=False)
@@ -118,6 +129,8 @@ def main() -> None:
           "(runs above average)")
     print(show.to_string(index=False))
     print("\nSaved reports/position_value_162.png, position_value_162.csv, position_value_players.csv")
+    if "--no-open" not in argv:
+        show_file(REPORTS / "position_value_162.png")
 
 
 if __name__ == "__main__":
