@@ -37,8 +37,20 @@ How catcher (and position-player) workload changes performance and value over a 
 ## Results so far (FanGraphs, 2021-2026, qualified starters)
 Share of the spread between starters that comes from defense: **C 36%** (27-46%), LF 24%, 2B 20%, SS 15%, 3B 13%,
 RF 13%, CF 12%, 1B 9%, DH 0%. Catcher defense SD 13.7 runs/150 g vs 5-8 elsewhere — framing drives it.
-Catcher samples: 128 player-seasons, 60 catchers. `position_value` (per-162 offense/defense) has been built; the owner
-is running it — check `reports/position_value_162.csv` once pushed.
+Catcher samples: 128 player-seasons, 60 catchers.
+
+Average qualified starter per 162 games (`reports/position_value_162.csv`), runs above average:
+
+| | C | 1B | 2B | 3B | SS | LF | CF | RF | DH |
+|---|---|---|---|---|---|---|---|---|---|
+| Offense | -3.5 | +13.1 | +3.7 | +7.8 | +5.2 | +8.2 | +5.2 | +13.3 | +17.6 |
+| Defense (fielding + positional) | +11.7 | -11.3 | +3.1 | +3.3 | +8.6 | -7.5 | +4.6 | -6.6 | -16.7 |
+| of which fielding | +3.0 | +0.5 | +1.4 | +2.0 | +2.0 | -0.2 | +3.1 | +0.6 | -1.2 |
+| Total | +8.2 | +1.7 | +6.8 | +11.1 | +13.8 | +0.7 | +9.9 | +6.7 | +0.9 |
+| WAR / 162 | 2.9 | 2.5 | 3.0 | 3.4 | 3.7 | 2.3 | 3.1 | 2.9 | 2.4 |
+
+Catchers are the only group whose average starter is below average on offense; nearly all their value is defense,
+mostly the positional adjustment (+8.7) plus fielding/framing (+3.0). Catchers average ~122 games vs ~137-141 elsewhere.
 Side note (reference only): IQ fielding agrees with FanGraphs at C (r 0.92), poorly at SS (0.35) and 2B (0.44).
 
 ## Open items
