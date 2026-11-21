@@ -1,6 +1,6 @@
 """Game-by-game workload log for every position player, with framing joined on for catchers.
 
-    python -m src.build_workload              # every season in data/league/
+    python -m src.build_workload              # every season from 2021 on
     python -m src.build_workload 2024 2025    # just these seasons
 
 Input   data/league/fielding_<year>.csv.gz   (one row per player / game / position, from IQ Savant)
@@ -32,10 +32,11 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[1]
 LEAGUE = ROOT / "data" / "league"
 OUT = ROOT / "data" / "workload"
+FIRST_SEASON = 2021  # catcher stances changed; earlier seasons are left out of the study
 
 
 def seasons() -> list[int]:
-    return sorted(int(p.name[9:13]) for p in LEAGUE.glob("fielding_*.csv.gz"))
+    return sorted(y for y in (int(p.name[9:13]) for p in LEAGUE.glob("fielding_*.csv.gz")) if y >= FIRST_SEASON)
 
 
 def player_games(year: int) -> pd.DataFrame:
